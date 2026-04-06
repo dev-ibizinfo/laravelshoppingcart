@@ -10,7 +10,7 @@ use Darryldecode\Cart\Validators\CartConditionValidator;
  * Time: 9:02 PM
  */
 
-class CartCondition {
+class CartCondition implements \JsonSerializable {
 
     /**
      * @var array
@@ -251,6 +251,49 @@ class CartCondition {
     protected function cleanValue($value)
     {
         return str_replace(array('%','-','+'),'',$value);
+    }
+
+    /**
+     * Specify data which should be serialized to JSON.
+     * This ensures the private $args property is included in JSON encoding,
+     * which is critical for Laravel's JSON session serialization.
+     *
+     * @return array
+     */
+    public function jsonSerialize(): mixed
+    {
+        return [
+            '__darryldecode_type' => 'CartCondition',
+            'args' => $this->args,
+            'parsedRawValue' => $this->parsedRawValue,
+        ];
+    }
+
+    /**
+     * Reconstruct a CartCondition from a plain array (e.g. after JSON deserialization).
+     * This bypasses the constructor validation since the data was already validated
+     * when the condition was originally created.
+     *
+     * @param array $data
+     * @return static|null
+     */
+    public static function fromArray(array $data): ?static
+    {
+        // Handle the typed JSON format (with __darryldecode_type marker)
+        if (isset($data['__darryldecode_type']) && $data['__darryldecode_type'] === 'CartCondition' && isset($data['args'])) {
+            $instance = new static($data['args']);
+            if (isset($data['parsedRawValue'])) {
+                $instance->parsedRawValue = $data['parsedRawValue'];
+            }
+            return $instance;
+        }
+
+        // Handle plain array format (the args themselves, must have name, type, value)
+        if (isset($data['name'], $data['type'], $data['value'])) {
+            return new static($data);
+        }
+
+        return null;
     }
 
     /**

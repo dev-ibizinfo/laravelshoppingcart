@@ -415,7 +415,30 @@ class Cart
      */
     public function getConditions()
     {
-        return new CartConditionCollection($this->session->get($this->sessionKeyCartConditions));
+        $rawConditions = $this->session->get($this->sessionKeyCartConditions);
+
+        if (!$rawConditions) {
+            return new CartConditionCollection([]);
+        }
+
+        $conditions = new CartConditionCollection($rawConditions);
+
+        // Rehydrate any conditions that were deserialized from JSON back into
+        // proper CartCondition objects. This ensures compatibility with
+        // Laravel's JSON session serialization ('serialization' => 'json').
+        return $conditions->map(function ($condition) {
+            if ($condition instanceof CartCondition) {
+                return $condition;
+            }
+
+            if (is_array($condition)) {
+                return CartCondition::fromArray($condition);
+            }
+
+            return null;
+        })->reject(function ($condition) {
+            return is_null($condition);
+        });
     }
 
     /**
@@ -690,8 +713,31 @@ class Cart
      */
     public function getContent()
     {
-        return (new CartCollection($this->session->get($this->sessionKeyCartItems)))->reject(function($item) {
-            return ! ($item instanceof ItemCollection);
+        $rawItems = $this->session->get($this->sessionKeyCartItems);
+
+        if (!$rawItems) {
+            return new CartCollection([]);
+        }
+
+        $items = new CartCollection($rawItems);
+
+        // Rehydrate any items that were deserialized from JSON back into
+        // proper ItemCollection objects. This ensures compatibility with
+        // Laravel's JSON session serialization ('serialization' => 'json').
+        return $items->map(function ($item) {
+            if ($item instanceof ItemCollection) {
+                return $item;
+            }
+
+            // Plain array from JSON deserialization — reconstruct the ItemCollection
+            if (is_array($item)) {
+                return $this->rehydrateItem($item);
+            }
+
+            // Unknown type — skip it
+            return null;
+        })->reject(function ($item) {
+            return is_null($item);
         });
     }
 
@@ -772,6 +818,70 @@ class Cart
     protected function saveConditions($conditions)
     {
         $this->session->put($this->sessionKeyCartConditions, $conditions);
+    }
+
+    /**
+     * Rehydrate a plain array (from JSON deserialization) back into an ItemCollection.
+     * This reconstructs the proper object graph including attributes and conditions.
+     *
+     * @param array $itemData
+     * @return ItemCollection
+     */
+    protected function rehydrateItem(array $itemData)
+    {
+        // Rehydrate attributes back into ItemAttributeCollection
+        if (isset($itemData['attributes']) && is_array($itemData['attributes'])) {
+            $itemData['attributes'] = new ItemAttributeCollection($itemData['attributes']);
+        }
+
+        // Rehydrate conditions back into CartCondition objects
+        if (isset($itemData['conditions'])) {
+            $itemData['conditions'] = $this->rehydrateItemConditions($itemData['conditions']);
+        }
+
+        return new ItemCollection($itemData, $this->config);
+    }
+
+    /**
+     * Rehydrate item-level conditions from plain arrays back into CartCondition objects.
+     * Handles both single condition and array-of-conditions formats.
+     *
+     * @param mixed $conditions
+     * @return CartCondition|array
+     */
+    protected function rehydrateItemConditions($conditions)
+    {
+        // Already a CartCondition instance — no rehydration needed
+        if ($conditions instanceof CartCondition) {
+            return $conditions;
+        }
+
+        // Empty or non-array — return as-is
+        if (!is_array($conditions) || empty($conditions)) {
+            return $conditions;
+        }
+
+        // Check if this is a single condition (associative array with 'name' key)
+        // vs an array of conditions (sequential array of arrays)
+        if (isset($conditions['name'])) {
+            // Single condition represented as associative array
+            return CartCondition::fromArray($conditions) ?? $conditions;
+        }
+
+        // Array of conditions — rehydrate each one
+        $rehydrated = [];
+        foreach ($conditions as $condition) {
+            if ($condition instanceof CartCondition) {
+                $rehydrated[] = $condition;
+            } elseif (is_array($condition)) {
+                $result = CartCondition::fromArray($condition);
+                if ($result !== null) {
+                    $rehydrated[] = $result;
+                }
+            }
+        }
+
+        return $rehydrated;
     }
 
     /**
